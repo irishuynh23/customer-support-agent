@@ -1,10 +1,49 @@
-# Customer Service Agent
+# Customer Support Agent
 
-A local demo that lets a business add website URLs, crawl and embed their content into a vector store, and answer customer questions through a ChatGPT-style chat. The agent speaks as the business (we/our/us) and only links to pages that were actually crawled.
+A customer support agent for businesses: answer common customer questions with responses grounded in the business’s website—hours, services, policies, and more—without guessing beyond what was actually crawled.
+
+## Features
+
+- **URL ingestion:** Paste URLs → backend crawls and embeds (same-site links, two levels deep by default). Status and errors shown in the sidebar.
+- **Session persistence:** Ingested knowledge and session survive page refresh; only **End Session** clears them and asks for new URLs.
+- **Business voice:** Agent answers as the business (we/our/us). “What can you do?” returns a short intro plus a list of sections with **Open** pills that link only to URLs that were actually retrieved (no guessed links, no 404s).
+- **Chat:** Markdown, code blocks with syntax highlighting and copy, sources in a single **Sources** dropdown per message. Retry and clear chats.
+- **End Session:** Clears session and conversations so you can enter new links and start fresh.
 
 ## Demo
 
-![Customer Service Agent demo](./assets/customer_service_agent.gif)
+![Customer Support Agent demo](./assets/customer_service_agent.gif)
+
+## Architecture
+
+Two pipelines share the same **Chroma** vector store. **`business_id`** (from the session) tags ingested chunks and **filters retrieval** so answers only use the current site’s documents.
+
+```mermaid
+flowchart TB
+  subgraph ingest["Ingest — Load website(s)"]
+    direction LR
+    U1[User URLs] --> FE1[React]
+    FE1 -->|POST /api/ingest| API1[FastAPI]
+    API1 --> Crawl["Crawl same-site links (depth 2)"]
+    Crawl --> Text["HTML to text"]
+    Text --> Split["Chunk + OpenAI embeddings"]
+    Split --> VS[(Chroma)]
+  end
+
+  subgraph chat["Chat — each message"]
+    direction LR
+    U2[User question] --> FE2[React]
+    FE2 -->|POST /api/chat| API2[FastAPI]
+    API2 --> Agent["LangChain agent + chat model"]
+    Agent --> Tool["retrieve_context tool (k=8)"]
+    Tool --> VS
+    Tool --> Agent
+    Agent --> Out["Answer + sources"]
+  end
+```
+
+- **Ingest** does not run inside the agent; it runs once per “Load website(s)” to populate Chroma.
+- **Chat** runs the agent: the model may call **`retrieve_context`** to pull relevant chunks before replying; the API surfaces **sources** from the tool’s retrieved documents.
 
 ## Tech stack
 
@@ -62,14 +101,6 @@ Open the URL Vite prints (usually `http://localhost:5173`).
 2. Click **Load website(s)** and wait until you see “Done. Crawling and embedding finished…”
 3. Ask questions in the chat (e.g. “What can you help me with?”, “What are your hours?”).
 4. Use **End Session** when you want to start over and add a different site; use **Clear chats** to reset conversations but keep the current site’s knowledge.
-
-## Features
-
-- **URL ingestion:** Paste URLs → backend crawls and embeds (same-site links, two levels deep by default). Status and errors shown in the sidebar.
-- **Session persistence:** Ingested knowledge and session survive page refresh; only **End Session** clears them and asks for new URLs.
-- **Business voice:** Agent answers as the business (we/our/us). “What can you do?” returns a short intro plus a list of sections with **Open** pills that link only to URLs that were actually retrieved (no guessed links, no 404s).
-- **Chat:** Markdown, code blocks with syntax highlighting and copy, sources in a single **Sources** dropdown per message. Retry and clear chats.
-- **End Session:** Clears session and conversations so you can enter new links and start fresh.
 
 ## API endpoints
 
