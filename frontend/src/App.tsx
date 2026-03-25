@@ -74,6 +74,10 @@ function stripTitleFromAnswer(answer: string): string {
   return answer.replace(/\nTITLE:\s*.+?(?:\n|$)/i, '').trim()
 }
 
+function createBusinessId(): string {
+  return `biz-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`
+}
+
 /** Remove "Source: ..." lines from message body; sources are shown in the dropdown. */
 function stripSourceLines(content: string): string {
   return content
@@ -182,11 +186,20 @@ function CodeBlockWithCopy({
   )
 }
 
-async function ingestUrls(urls: string[]) {
+function shouldIgnoreAutoFocusClick(target: EventTarget | null): boolean {
+  if (!target || !(target instanceof Element)) return false
+  // Don't steal focus when interacting with controls/links or selecting within the input.
+  const interactive = target.closest(
+    'a,button,input,textarea,select,summary,details,[role="button"],[contenteditable="true"]'
+  )
+  return Boolean(interactive)
+}
+
+async function ingestUrls(urls: string[], businessId: string) {
   const res = await fetch(`${API_BASE_URL}/api/ingest`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ urls }),
+    body: JSON.stringify({ urls, business_id: businessId }),
   })
   if (!res.ok) {
     const text = await res.text().catch(() => '')
@@ -195,11 +208,15 @@ async function ingestUrls(urls: string[]) {
   return (await res.json()) as { indexed_pages: number; errors: Array<{ url: string; error: string }> }
 }
 
-async function sendPrompt(prompt: string, history?: { role: Role; content: string }[]) {
+async function sendPrompt(
+  prompt: string,
+  history?: { role: Role; content: string }[],
+  businessId?: string,
+) {
   const res = await fetch(`${API_BASE_URL}/api/chat`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ prompt, messages: history ?? null }),
+    body: JSON.stringify({ prompt, messages: history ?? null, business_id: businessId ?? null }),
   })
   if (!res.ok) {
     const text = await res.text().catch(() => '')
@@ -246,20 +263,26 @@ function saveConversations(conversations: Conversation[], activeId: string | nul
   }
 }
 
-function loadSession(): number {
+function loadSession(): { ingestedChunks: number; businessId: string | null } {
   try {
     const raw = localStorage.getItem(SESSION_STORAGE_KEY)
-    if (!raw) return 0
-    const data = JSON.parse(raw) as { ingestedChunks?: number }
-    return typeof data.ingestedChunks === 'number' && data.ingestedChunks > 0 ? data.ingestedChunks : 0
+    if (!raw) return { ingestedChunks: 0, businessId: null }
+    const data = JSON.parse(raw) as { ingestedChunks?: number; businessId?: string | null }
+    const ingestedChunks =
+      typeof data.ingestedChunks === 'number' && data.ingestedChunks > 0 ? data.ingestedChunks : 0
+    const businessId =
+      typeof data.businessId === 'string' && data.businessId.trim().length > 0
+        ? data.businessId
+        : null
+    return { ingestedChunks, businessId }
   } catch {
-    return 0
+    return { ingestedChunks: 0, businessId: null }
   }
 }
 
-function saveSession(ingestedChunks: number) {
+function saveSession(ingestedChunks: number, businessId: string | null) {
   try {
-    localStorage.setItem(SESSION_STORAGE_KEY, JSON.stringify({ ingestedChunks }))
+    localStorage.setItem(SESSION_STORAGE_KEY, JSON.stringify({ ingestedChunks, businessId }))
   } catch {
     // ignore
   }
@@ -296,7 +319,11 @@ function App() {
   const [ingestLoading, setIngestLoading] = useState(false)
   const [ingestError, setIngestError] = useState<string | null>(null)
   const [ingestSuccess, setIngestSuccess] = useState<string | null>(null)
-  const [ingestedChunks, setIngestedChunks] = useState(() => loadSession())
+  const session = loadSession()
+  const [businessId, setBusinessId] = useState<string>(() => {
+    return session.businessId ?? createBusinessId()
+  })
+  const [ingestedChunks, setIngestedChunks] = useState(() => session.ingestedChunks)
 
   const activeConversation = conversations.find((c) => c.id === activeId) ?? null
   const messages = activeConversation?.messages ?? []
@@ -324,8 +351,18 @@ function App() {
   }, [])
 
   useEffect(() => {
-    if (ingestedChunks > 0) saveSession(ingestedChunks)
-  }, [ingestedChunks])
+    const handleEscape = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') setIsSidebarOpen(false)
+    }
+    if (isSidebarOpen) {
+      document.addEventListener('keydown', handleEscape)
+      return () => document.removeEventListener('keydown', handleEscape)
+    }
+  }, [isSidebarOpen])
+
+  useEffect(() => {
+    saveSession(ingestedChunks, businessId)
+  }, [ingestedChunks, businessId])
 
   const handleResetAllConversations = () => {
     const next = createConversation()
@@ -343,6 +380,8 @@ function App() {
     setIngestedChunks(0)
     setIngestSuccess(null)
     setIngestError(null)
+    setUrlInput('')
+    setBusinessId(createBusinessId())
     const next = createConversation()
     setConversations([next])
     setActiveId(next.id)
@@ -353,10 +392,18 @@ function App() {
     }
   }
 
+  // Scroll to bottom on mount and when messages or streaming content changes
   useEffect(() => {
     const el = messagesRef.current
     if (!el) return
-    el.scrollTop = el.scrollHeight
+    el.scrollTo({ top: el.scrollHeight, behavior: 'smooth' })
+  }, [messages])
+
+  // Auto-focus the composer when returning to the tab/window.
+  useEffect(() => {
+    const handleWindowFocus = () => inputRef.current?.focus()
+    window.addEventListener('focus', handleWindowFocus)
+    return () => window.removeEventListener('focus', handleWindowFocus)
   }, [])
 
   useEffect(() => {
@@ -376,7 +423,7 @@ function App() {
     setIngestSuccess(null)
     setIngestLoading(true)
     try {
-      const result = await ingestUrls(lines)
+      const result = await ingestUrls(lines, businessId)
       setIngestedChunks((prev) => prev + result.indexed_pages)
       if (result.errors.length > 0) {
         setIngestError(result.errors.map((e) => `${e.url}: ${e.error}`).join('; '))
@@ -441,7 +488,8 @@ function App() {
     try {
       const { answer, sources } = await sendPrompt(
         trimmed,
-        [...(messages || []), userMessage].map((m) => ({ role: m.role, content: m.content }))
+        [...(messages || []), userMessage].map((m) => ({ role: m.role, content: m.content })),
+        businessId,
       )
       const displayAnswer = stripTitleFromAnswer(answer)
       const suggestedTitle = parseSuggestedTitle(answer)
@@ -536,7 +584,14 @@ function App() {
   }
 
   return (
-    <div className={`app-root ${isSidebarOpen ? '' : 'sidebar-collapsed'}`}>
+    <div className={`app-root ${isSidebarOpen ? 'sidebar-open' : 'sidebar-collapsed'}`}>
+      {isSidebarOpen && (
+        <div
+          className="sidebar-backdrop"
+          aria-hidden="true"
+          onClick={() => setIsSidebarOpen(false)}
+        />
+      )}
       <aside className="sidebar">
         <button
           type="button"
@@ -635,7 +690,14 @@ function App() {
         </div>
       </aside>
 
-      <main className="chat-container">
+      <main
+        className="chat-container"
+        onMouseDown={(e) => {
+          // Focus input when clicking anywhere in chat area.
+          if (shouldIgnoreAutoFocusClick(e.target)) return
+          inputRef.current?.focus()
+        }}
+      >
         <header className="chat-header">
           <div className="chat-header-left">
             {!isSidebarOpen && (
@@ -663,7 +725,12 @@ function App() {
           </div>
         </header>
 
-        <section className="messages" aria-label="Chat messages" ref={messagesRef}>
+        <section
+          className="messages"
+          aria-label="Chat messages"
+          aria-busy={isLoading}
+          ref={messagesRef}
+        >
           {messages.map((m) => (
             <div
               key={m.id}
@@ -677,8 +744,10 @@ function App() {
                     components={{
                       a: ({ href, children, ...props }) => {
                         const safeHref = href ?? '#'
+                        const isMailto = safeHref.startsWith('mailto:')
+                        const isTel = safeHref.startsWith('tel:')
                         let label = children
-                        if (href) {
+                        if (href && !isMailto && !isTel) {
                           try {
                             const u = new URL(safeHref)
                             const host = u.hostname.replace(/^www\./i, '')
@@ -698,10 +767,10 @@ function App() {
                           <a
                             {...props}
                             href={safeHref}
-                            target="_blank"
-                            rel="noreferrer"
+                            target={isMailto || isTel ? undefined : '_blank'}
+                            rel={isMailto || isTel ? undefined : 'noreferrer'}
                             className="link-chip"
-                            title={hostLabel(safeHref)}
+                            title={isMailto || isTel ? safeHref : hostLabel(safeHref)}
                           >
                             {label}
                           </a>
@@ -729,7 +798,7 @@ function App() {
                   </ReactMarkdown>
                 </div>
                 {m.isStreaming && (
-                  <div className="bubble-loading">
+                  <div className="bubble-loading" aria-hidden="true">
                     <span className="dots">
                       <span />
                       <span />
@@ -776,34 +845,47 @@ function App() {
 
         <footer className="composer">
           {error && (
-            <div className="error-banner">
-              <span>{error}</span>
-              {lastPrompt && lastPromptConversationId === activeId && (
+            <div className="error-banner" role="alert" aria-live="assertive">
+              <span className="error-banner-message">{error}</span>
+              <div className="error-banner-actions">
+                {lastPrompt && lastPromptConversationId === activeId && (
+                  <button
+                    type="button"
+                    className="error-retry"
+                    onClick={handleRetryLast}
+                    disabled={isLoading}
+                  >
+                    Retry last question
+                  </button>
+                )}
                 <button
                   type="button"
-                  className="error-retry"
-                  onClick={handleRetryLast}
-                  disabled={isLoading}
+                  className="error-banner-dismiss"
+                  onClick={() => setError(null)}
+                  aria-label="Dismiss error"
                 >
-                  Retry last question
+                  ×
                 </button>
-              )}
+              </div>
             </div>
           )}
-          <form onSubmit={handleSubmit} className="composer-form">
+          <form onSubmit={handleSubmit} className="composer-form" aria-label="Send a message">
             <textarea
               className="composer-input"
-              placeholder={hasIngested ? 'Ask a question about the loaded website(s)…' : 'Add website links in the sidebar first…'}
+              placeholder={hasIngested ? 'Ask a question about the loaded website(s)… (Enter to send, Shift+Enter for new line)' : 'Add website links in the sidebar first…'}
               value={input}
               ref={inputRef}
               onChange={(e) => setInput(e.target.value)}
               onKeyDown={handleComposerKeyDown}
               rows={2}
+              aria-label="Message input"
             />
             <button
               className="composer-send"
               type="submit"
               disabled={isLoading || !input.trim() || !hasIngested}
+              title={hasIngested ? 'Send (Enter)' : 'Add a website first'}
+              aria-label={isLoading ? 'Sending…' : 'Send message'}
             >
               {isLoading ? 'Sending…' : 'Send'}
             </button>

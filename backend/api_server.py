@@ -15,6 +15,7 @@ class ChatMessage(BaseModel):
 class ChatRequest(BaseModel):
   prompt: str
   messages: Optional[List[ChatMessage]] = None
+  business_id: Optional[str] = None
 
 
 class ChatResponse(BaseModel):
@@ -24,6 +25,7 @@ class ChatResponse(BaseModel):
 
 class IngestRequest(BaseModel):
   urls: List[HttpUrl]
+  business_id: Optional[str] = None
 
 
 class IngestResponse(BaseModel):
@@ -57,7 +59,7 @@ def api_ingest(request: IngestRequest) -> IngestResponse:
   if not request.urls:
     raise HTTPException(status_code=400, detail="At least one URL is required.")
 
-  result = ingest_urls([str(u) for u in request.urls])
+  result = ingest_urls([str(u) for u in request.urls], business_id=request.business_id)
   return IngestResponse(
     indexed_pages=int(result.get("indexed_pages", 0)),
     errors=result.get("errors", []),
@@ -76,7 +78,7 @@ def chat(request: ChatRequest) -> ChatResponse:
   )
 
   try:
-    result: Dict[str, Any] = run_llm(prompt, history=history)
+    result: Dict[str, Any] = run_llm(prompt, history=history, business_id=request.business_id)
   except Exception as exc:  # noqa: BLE001
     raise HTTPException(status_code=500, detail="Failed to process request.") from exc
 

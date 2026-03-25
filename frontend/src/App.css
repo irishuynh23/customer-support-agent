@@ -991,13 +991,47 @@
   margin-bottom: 0.5rem;
   padding: 0.5rem 0.75rem;
   border-radius: 0.5rem;
-  background-color: rgba(248, 113, 113, 0.1);
-  border: 1px solid rgba(248, 113, 113, 0.35);
+  background-color: rgba(248, 113, 113, 0.12);
+  border: 1px solid rgba(248, 113, 113, 0.4);
   color: #fecaca;
   font-size: 0.8rem;
   display: flex;
   align-items: center;
+  justify-content: space-between;
   gap: 0.75rem;
+}
+
+.error-banner-message {
+  flex: 1;
+  min-width: 0;
+}
+
+.error-banner-actions {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  flex-shrink: 0;
+}
+
+.error-banner-dismiss {
+  width: 1.5rem;
+  height: 1.5rem;
+  border: none;
+  border-radius: 0.25rem;
+  background: rgba(248, 113, 113, 0.25);
+  color: #fecaca;
+  font-size: 1.1rem;
+  line-height: 1;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: background-color 0.15s, color 0.15s;
+}
+
+.error-banner-dismiss:hover {
+  background: rgba(248, 113, 113, 0.4);
+  color: #fff;
 }
 
 .error-retry {
@@ -1077,9 +1111,23 @@
   box-shadow: none;
 }
 
+/* Backdrop to close sidebar on mobile when tapping outside */
+.sidebar-backdrop {
+  display: none;
+}
+
 @media (max-width: 768px) {
   .app-root {
     grid-template-columns: 1fr;
+  }
+
+  .sidebar-backdrop {
+    display: block;
+    position: fixed;
+    inset: 0;
+    background: rgba(0, 0, 0, 0.45);
+    z-index: 18;
+    cursor: pointer;
   }
 
   .sidebar {
@@ -1109,6 +1157,7 @@
   }
 
   .chat-header-pill {
-    display: none;
+    font-size: 0.7rem;
+    padding: 0.2rem 0.5rem;
   }
 }

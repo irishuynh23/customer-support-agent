@@ -26,3 +26,7 @@ frontend/dist/
 .vscode/
 .DS_Store
 *.log
+
+# Planning / internal docs
+customer-service-agent-blueprint_*.plan.md
+dynamic-website-ingestion-customer-support-agent_*.plan.md
